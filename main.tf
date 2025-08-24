@@ -67,6 +67,18 @@ resource "azurerm_network_security_group" "public_nsg" {
     protocol                   = "Tcp"
     source_port_range          = "*"
     destination_port_range     = "80"
+    source_address_prefix      = "*"
+    destination_address_prefix = "192.168.0.0/17"
+  }
+
+  security_rule {
+    name                       = "secgroup1-outbound"
+    priority                   = 101
+    direction                  = "Outbound"
+    access                     = "Allow"
+    protocol                   = "Tcp"
+    source_port_range          = "*"
+    destination_port_range     = "80"
     source_address_prefix      = "192.168.0.0/17"
     destination_address_prefix = "192.168.128.0/17"
   }
@@ -84,15 +96,14 @@ resource "azurerm_network_security_group" "private_nsg" {
   location            = azurerm_resource_group.rg.location
   resource_group_name = azurerm_resource_group.rg.name
 
-  # Example: allow all outbound, deny inbound for demonstration
   security_rule {
-    name                       = "DenyInbound"
+    name                       = "AllowHTTPInbound"
     priority                   = 100
     direction                  = "Inbound"
     access                     = "Allow"
-    protocol                   = "*"
+    protocol                   = "Tcp"
     source_port_range          = "*"
-    destination_port_range     = "*"
+    destination_port_range     = "80"
     source_address_prefix      = "*"
     destination_address_prefix = "192.168.128.0/17"
   }
@@ -103,39 +114,47 @@ resource "azurerm_subnet_network_security_group_association" "private_subnet_nsg
   network_security_group_id = azurerm_network_security_group.private_nsg.id
 }
 
-resource "azurerm_linux_virtual_machine_scale_set" "this" {
-  name                            = "demo-vmss"
+resource "azurerm_network_interface" "this" {
+  name                = "example-nic"
+  location            = azurerm_resource_group.rg.location
+  resource_group_name = azurerm_resource_group.rg.name
+
+  ip_configuration {
+    name                          = "internal"
+    subnet_id                     = azurerm_subnet.private_subnet.id
+    private_ip_address_allocation = "Dynamic"
+  }
+}
+
+resource "azurerm_network_interface_backend_address_pool_association" "this" {
+  network_interface_id    = azurerm_network_interface.this.id
+  ip_configuration_name   = azurerm_network_interface.this.ip_configuration[0].name
+  backend_address_pool_id = azurerm_lb_backend_address_pool.this.id
+}
+
+resource "azurerm_linux_virtual_machine" "this" {
+  name                            = "example-machine"
   resource_group_name             = azurerm_resource_group.rg.name
   location                        = azurerm_resource_group.rg.location
-  sku                             = "Standard_B1s"
-  instances                       = 1
-  zones                           = ["1"]
   disable_password_authentication = false
-  admin_username                  = "adminuser"
-  admin_password                  = var.vm_password
+
+  size = "Standard_B1s"
+  network_interface_ids = [
+    azurerm_network_interface.this.id,
+  ]
+  admin_username = "adminuser"
+  admin_password = var.vm_password
+
+  os_disk {
+    caching              = "ReadWrite"
+    storage_account_type = "Standard_LRS"
+  }
 
   source_image_reference {
     publisher = "Canonical"
     offer     = "0001-com-ubuntu-server-jammy"
     sku       = "22_04-lts"
     version   = "latest"
-  }
-
-  os_disk {
-    storage_account_type = "Standard_LRS"
-    caching              = "ReadWrite"
-  }
-
-  network_interface {
-    name    = "nicOne"
-    primary = true
-
-    ip_configuration {
-      name                                   = "internal"
-      primary                                = true
-      subnet_id                              = azurerm_subnet.private_subnet.id
-      load_balancer_backend_address_pool_ids = [azurerm_lb_backend_address_pool.this.id]
-    }
   }
 
   custom_data = base64encode(file("custom_data_script.tpl"))
